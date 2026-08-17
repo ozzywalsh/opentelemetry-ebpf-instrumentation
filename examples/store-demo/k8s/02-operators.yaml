@@ -11,10 +11,10 @@ runAsUser:
   type: RunAsAny
 seLinuxContext:
   type: RunAsAny
-allowHostPorts: false
+allowHostPorts: true
 allowHostDirVolumePlugin: true
 allowHostIPC: false
-allowHostNetwork: false
+allowHostNetwork: true
 allowHostPID: true
 allowPrivilegedContainer: false
 readOnlyRootFilesystem: true
@@ -26,6 +26,7 @@ allowedCapabilities:
   - DAC_READ_SEARCH
   - PERFMON
   - NET_ADMIN
+  - SYS_ADMIN
 volumes:
   - emptyDir
   - hostPath

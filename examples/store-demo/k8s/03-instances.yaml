@@ -27,6 +27,9 @@ rules:
   - apiGroups: ['']
     resources: ['pods', 'services', 'nodes']
     verbs: ['list', 'watch']
+  - apiGroups: ['config.openshift.io']
+    resources: ['infrastructures']
+    verbs: ['get']
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -40,6 +43,43 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: obi-store-demo
+---
+# Allow obi-collector to write traces to the Tempo dev tenant via the gateway.
+# The Tempo gateway issues a SubjectAccessReview for create on tempo.grafana.com/dev (traces).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-store-demo-tempo-write
+rules:
+  - apiGroups: ['tempo.grafana.com']
+    resources: ['dev']
+    resourceNames: ['traces']
+    verbs: ['create']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-store-demo-tempo-write
+subjects:
+  - kind: ServiceAccount
+    name: obi-collector
+    namespace: obi-store-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-store-demo-tempo-write
+---
+# Grant use of the obi-unprivileged SCC. OpenShift does not auto-generate a
+# system:openshift:scc:<name> ClusterRole for custom SCCs, so we define our own.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-store-demo-scc
+rules:
+  - apiGroups: ['security.openshift.io']
+    resources: ['securitycontextconstraints']
+    resourceNames: ['obi-unprivileged']
+    verbs: ['use']
 ---
 # Bind the obi-unprivileged SCC to the collector service account.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -53,7 +93,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: system:openshift:scc:obi-unprivileged
+  name: obi-store-demo-scc
 
 # ---- OBI collector -------------------------------------------------------
 # Runs OBI as a receiver inside collector-contrib. The DaemonSet attaches
@@ -70,6 +110,7 @@ spec:
   image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.156.0
   serviceAccount: obi-collector
   hostPID: true
+  hostNetwork: true
   securityContext:
     runAsUser: 0
     readOnlyRootFilesystem: true
@@ -82,6 +123,7 @@ spec:
         - DAC_READ_SEARCH
         - PERFMON
         - NET_ADMIN
+        - SYS_ADMIN
       drop:
         - ALL
   env:
@@ -108,6 +150,9 @@ spec:
         filename: /var/run/secrets/kubernetes.io/serviceaccount/token
     receivers:
       obi:
+        ebpf:
+          context_propagation: "headers,tcp"
+          override_bpfloop_enabled: true
         discovery:
           exclude_otel_instrumented_services: true
           instrument:
@@ -223,3 +268,17 @@ metadata:
   name: distributed-tracing
 spec:
   type: DistributedTracing
+
+# ---- Metrics console plugin -----------------------------------------------
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: monitoring
+spec:
+  type: Monitoring
+  monitoring:
+    perses:
+      enabled: false
+    clusterHealthAnalyzer:
+      enabled: false
