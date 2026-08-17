@@ -1,0 +1,145 @@
+# ---- OBI unprivileged SCC ------------------------------------------------
+# Allows the OBI collector DaemonSet to load eBPF programs with fine-grained
+# capabilities instead of a fully privileged container.
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: obi-unprivileged
+  annotations:
+    kubernetes.io/description: Allows OBI collectors to run with fine-grained eBPF capabilities without full privileges
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+allowHostPorts: false
+allowHostDirVolumePlugin: true
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: true
+allowPrivilegedContainer: false
+readOnlyRootFilesystem: true
+allowedCapabilities:
+  - BPF
+  - SYS_PTRACE
+  - NET_RAW
+  - CHECKPOINT_RESTORE
+  - DAC_READ_SEARCH
+  - PERFMON
+  - NET_ADMIN
+volumes:
+  - emptyDir
+  - hostPath
+  - configMap
+  - secret
+  - downwardAPI
+  - projected
+
+# ---- Cluster Observability Operator (COO) --------------------------------
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-cluster-observability
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cluster-observability-operator-group
+  namespace: openshift-cluster-observability
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-observability-operator
+  namespace: openshift-cluster-observability
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: cluster-observability-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+# ---- Tempo Operator -------------------------------------------------------
+---
+apiVersion: project.openshift.io/v1
+kind: Project
+metadata:
+  name: openshift-tempo-operator
+  labels:
+    kubernetes.io/metadata.name: openshift-tempo-operator
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-tempo-operator
+  namespace: openshift-tempo-operator
+spec:
+  upgradeStrategy: Default
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: tempo-product
+  namespace: openshift-tempo-operator
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: tempo-product
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+# ---- OTel Operator --------------------------------------------------------
+---
+apiVersion: project.openshift.io/v1
+kind: Project
+metadata:
+  name: openshift-opentelemetry-operator
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-opentelemetry-operator
+  namespace: openshift-opentelemetry-operator
+spec:
+  upgradeStrategy: Default
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: opentelemetry-product
+  namespace: openshift-opentelemetry-operator
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: opentelemetry-product
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+# Grants the operator permission to create RBAC for the k8sattributes processor.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: generate-processors-rbac
+rules:
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterrolebindings, clusterroles]
+    verbs: [create, delete, get, list, patch, update, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: generate-processors-rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: generate-processors-rbac
+subjects:
+  - kind: ServiceAccount
+    name: opentelemetry-operator-controller-manager
+    namespace: openshift-opentelemetry-operator

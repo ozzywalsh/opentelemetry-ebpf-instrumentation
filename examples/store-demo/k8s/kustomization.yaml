@@ -15,6 +15,35 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: obi-store-demo
+images:
+- name: obi-store-demo-adservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-adservice
+- name: obi-store-demo-cartservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-cartservice
+- name: obi-store-demo-checkoutservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-checkoutservice
+- name: obi-store-demo-currencyservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-currencyservice
+- name: obi-store-demo-emailservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-emailservice
+- name: obi-store-demo-frontend
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-frontend
+- name: obi-store-demo-loadgenerator
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-loadgenerator
+- name: obi-store-demo-paymentservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-paymentservice
+- name: obi-store-demo-productcatalogservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-productcatalogservice
+- name: obi-store-demo-recommendationservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-recommendationservice
+- name: obi-store-demo-shippingservice
+  newName: image-registry.openshift-image-registry.svc:5000/obi-store-demo/obi-store-demo-shippingservice
+
+patches:
+- path: patch-openshift-securitycontext.yaml
+  target:
+    kind: Deployment
+
 resources:
 - 00-namespace.yaml
 - 01-observability.yaml

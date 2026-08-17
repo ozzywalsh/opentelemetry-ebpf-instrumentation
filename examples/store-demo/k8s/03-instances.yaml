@@ -1,0 +1,225 @@
+# ---- Enable user workload monitoring -------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+
+# ---- OBI collector RBAC --------------------------------------------------
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obi-collector
+  namespace: obi-store-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obi-store-demo
+rules:
+  - apiGroups: ['apps']
+    resources: ['replicasets']
+    verbs: ['list', 'watch']
+  - apiGroups: ['']
+    resources: ['pods', 'services', 'nodes']
+    verbs: ['list', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-store-demo
+subjects:
+  - kind: ServiceAccount
+    name: obi-collector
+    namespace: obi-store-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obi-store-demo
+---
+# Bind the obi-unprivileged SCC to the collector service account.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obi-store-demo-scc
+subjects:
+  - kind: ServiceAccount
+    name: obi-collector
+    namespace: obi-store-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:obi-unprivileged
+
+# ---- OBI collector -------------------------------------------------------
+# Runs OBI as a receiver inside collector-contrib. The DaemonSet attaches
+# eBPF programs to store workloads and exports traces to Tempo and metrics
+# to user-workload Prometheus.
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: obi
+  namespace: obi-store-demo
+spec:
+  mode: daemonset
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.156.0
+  serviceAccount: obi-collector
+  hostPID: true
+  securityContext:
+    runAsUser: 0
+    readOnlyRootFilesystem: true
+    capabilities:
+      add:
+        - BPF
+        - SYS_PTRACE
+        - NET_RAW
+        - CHECKPOINT_RESTORE
+        - DAC_READ_SEARCH
+        - PERFMON
+        - NET_ADMIN
+      drop:
+        - ALL
+  env:
+    - name: OTEL_EBPF_DISCOVERY_POLL_INTERVAL
+      value: 5s
+    - name: OTEL_EBPF_METRICS_INTERVAL
+      value: 30s
+    - name: OTEL_EBPF_NAME_RESOLVER_SOURCES
+      value: k8s,dns
+  volumes:
+    - name: var-run-obi
+      emptyDir: {}
+    - name: cgroup
+      hostPath:
+        path: /sys/fs/cgroup
+  volumeMounts:
+    - name: var-run-obi
+      mountPath: /var/run/obi
+    - name: cgroup
+      mountPath: /sys/fs/cgroup
+  config:
+    extensions:
+      bearertokenauth:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+    receivers:
+      obi:
+        discovery:
+          exclude_otel_instrumented_services: true
+          instrument:
+            - namespace: obi-store-demo
+              k8s_deployment_name: adservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: cartservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: checkoutservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: currencyservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: emailservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: frontend
+            - namespace: obi-store-demo
+              k8s_deployment_name: paymentservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: productcatalogservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: recommendationservice
+            - namespace: obi-store-demo
+              k8s_deployment_name: shippingservice
+        attributes:
+          kubernetes:
+            enable: "true"
+        routes:
+          patterns:
+            - /
+            - /product/:product_id
+            - /cart
+            - /cart/empty
+            - /setCurrency
+            - /logout
+            - /cart/checkout
+            - /_healthz
+          unmatched: low-cardinality
+    processors:
+      batch: {}
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 50
+        spike_limit_percentage: 30
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+      otlp/tempo:
+        endpoint: tempo-tempo-gateway.obi-store-demo.svc:4317
+        tls:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+        headers:
+          X-Scope-OrgID: dev
+        auth:
+          authenticator: bearertokenauth
+    service:
+      extensions: [bearertokenauth]
+      pipelines:
+        metrics:
+          receivers: [obi]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus]
+        traces:
+          receivers: [obi]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/tempo]
+
+# ---- ServiceMonitor -------------------------------------------------------
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: obi-collector
+  namespace: obi-store-demo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obi-collector
+  endpoints:
+    - port: prometheus
+      interval: 30s
+
+# ---- Tempo instance -------------------------------------------------------
+---
+apiVersion: tempo.grafana.com/v1alpha1
+kind: TempoMonolithic
+metadata:
+  name: tempo
+  namespace: obi-store-demo
+spec:
+  storage:
+    traces:
+      backend: memory
+      size: 1Gi
+  multitenancy:
+    enabled: true
+    mode: openshift
+    authentication:
+      - tenantName: dev
+        tenantId: dev
+  jaegerui:
+    enabled: true
+    route:
+      enabled: true
+  template:
+    gateway:
+      enabled: true
+
+# ---- Distributed Tracing console plugin -----------------------------------
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: distributed-tracing
+spec:
+  type: DistributedTracing
